@@ -193,3 +193,146 @@
     (ok true)
   )
 )
+
+;; Reward Distribution
+;; Winners claim proportional rewards from the total prize pool
+(define-public (claim-rewards (market-id uint))
+  (let (
+      (market (unwrap! (map-get? markets market-id) ERR_MARKET_NOT_FOUND))
+      (position (unwrap!
+        (map-get? positions {
+          market-id: market-id,
+          trader: tx-sender,
+        })
+        ERR_MARKET_NOT_FOUND
+      ))
+    )
+    ;; Validate claim eligibility
+    (asserts! (get resolved market) ERR_UNRESOLVED_MARKET)
+    (asserts! (not (get claimed position)) ERR_REWARDS_CLAIMED)
+
+    (let (
+        (price-rose (> (get closing-price market) (get opening-price market)))
+        (winning-side (if price-rose
+          "bull"
+          "bear"
+        ))
+        (total-stakes (+ (get bull-stakes market) (get bear-stakes market)))
+        (winning-stakes (if price-rose
+          (get bull-stakes market)
+          (get bear-stakes market)
+        ))
+      )
+      ;; Verify winning prediction
+      (asserts! (is-eq (get direction position) winning-side)
+        ERR_INVALID_PREDICTION
+      )
+
+      (let (
+          (gross-payout (/ (* (get amount position) total-stakes) winning-stakes))
+          (protocol-fee (/ (* gross-payout (var-get protocol-fee-rate)) u10000))
+          (net-payout (- gross-payout protocol-fee))
+        )
+        ;; Execute reward distribution
+        (try! (as-contract (stx-transfer? net-payout (as-contract tx-sender) tx-sender)))
+        (try! (as-contract (stx-transfer? protocol-fee (as-contract tx-sender) PROTOCOL_OWNER)))
+
+        ;; Mark rewards as claimed
+        (map-set positions {
+          market-id: market-id,
+          trader: tx-sender,
+        }
+          (merge position { claimed: true })
+        )
+
+        (ok net-payout)
+      )
+    )
+  )
+)
+
+;; QUERY FUNCTIONS
+
+;; Retrieve Market Information
+(define-read-only (get-market-info (market-id uint))
+  (map-get? markets market-id)
+)
+
+;; Get Trader Position Details  
+(define-read-only (get-position
+    (market-id uint)
+    (trader principal)
+  )
+  (map-get? positions {
+    market-id: market-id,
+    trader: trader,
+  })
+)
+
+;; Protocol Treasury Balance
+(define-read-only (get-treasury-balance)
+  (stx-get-balance (as-contract tx-sender))
+)
+
+;; Market Analytics
+(define-read-only (get-market-metrics (market-id uint))
+  (match (map-get? markets market-id)
+    market-data (let ((total-volume (+ (get bull-stakes market-data) (get bear-stakes market-data))))
+      (some {
+        volume: total-volume,
+        bull-ratio: (if (> total-volume u0)
+          (/ (* (get bull-stakes market-data) u100) total-volume)
+          u0
+        ),
+        bear-ratio: (if (> total-volume u0)
+          (/ (* (get bear-stakes market-data) u100) total-volume)
+          u0
+        ),
+      })
+    )
+    none
+  )
+)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+;; Update Oracle Provider
+(define-public (set-oracle (new-oracle principal))
+  (begin
+    (asserts! (is-eq tx-sender PROTOCOL_OWNER) ERR_UNAUTHORIZED)
+    (var-set oracle-address new-oracle)
+    (ok true)
+  )
+)
+
+;; Adjust Minimum Stake Requirement
+(define-public (set-minimum-stake (new-minimum uint))
+  (begin
+    (asserts! (is-eq tx-sender PROTOCOL_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (> new-minimum u0) ERR_INVALID_PARAMETER)
+    (var-set minimum-stake new-minimum)
+    (ok true)
+  )
+)
+
+;; Update Protocol Fee Structure
+(define-public (set-protocol-fee (new-fee-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender PROTOCOL_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= new-fee-rate u1000) ERR_INVALID_PARAMETER) ;; Maximum 10%
+    (var-set protocol-fee-rate new-fee-rate)
+    (ok true)
+  )
+)
+
+;; Treasury Management
+(define-public (withdraw-treasury (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender PROTOCOL_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= amount (stx-get-balance (as-contract tx-sender)))
+      ERR_INSUFFICIENT_BALANCE
+    )
+    (try! (as-contract (stx-transfer? amount (as-contract tx-sender) PROTOCOL_OWNER)))
+    (ok amount)
+  )
+)
