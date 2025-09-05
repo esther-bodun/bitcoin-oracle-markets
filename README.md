@@ -309,3 +309,4 @@ This project is licensed under the ISC License - see the [LICENSE](LICENSE) file
 - Clarity language team for the secure smart contract platform
 - Bitcoin community for inspiration and support
 - Contributors and early adopters
+
