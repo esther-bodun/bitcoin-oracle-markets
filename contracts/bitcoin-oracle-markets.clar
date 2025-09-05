@@ -91,3 +91,105 @@
     (asserts! (is-eq tx-sender PROTOCOL_OWNER) ERR_UNAUTHORIZED)
     (asserts! (> end-block start-block) ERR_INVALID_PARAMETER)
     (asserts! (> initial-price u0) ERR_INVALID_PARAMETER)
+
+    ;; Register new market
+    (map-set markets market-id {
+      opening-price: initial-price,
+      closing-price: u0,
+      bull-stakes: u0,
+      bear-stakes: u0,
+      start-height: start-block,
+      end-height: end-block,
+      resolved: false,
+    })
+
+    ;; Increment market counter
+    (var-set market-counter (+ market-id u1))
+    (ok market-id)
+  )
+)
+
+;; Submit Price Prediction
+;; Allows participants to stake STX tokens on Bitcoin price direction
+(define-public (place-prediction
+    (market-id uint)
+    (price-direction (string-ascii 4))
+    (stake-amount uint)
+  )
+  (let (
+      (market (unwrap! (map-get? markets market-id) ERR_MARKET_NOT_FOUND))
+      (current-block stacks-block-height)
+    )
+    ;; Validate market timing
+    (asserts!
+      (and
+        (>= current-block (get start-height market))
+        (< current-block (get end-height market))
+      )
+      ERR_MARKET_CLOSED
+    )
+
+    ;; Validate prediction parameters
+    (asserts! (or (is-eq price-direction "bull") (is-eq price-direction "bear"))
+      ERR_INVALID_PREDICTION
+    )
+    (asserts! (>= stake-amount (var-get minimum-stake)) ERR_INVALID_PARAMETER)
+    (asserts! (<= stake-amount (stx-get-balance tx-sender))
+      ERR_INSUFFICIENT_BALANCE
+    )
+
+    ;; Transfer stake to protocol vault
+    (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+    ;; Record participant position
+    (map-set positions {
+      market-id: market-id,
+      trader: tx-sender,
+    } {
+      direction: price-direction,
+      amount: stake-amount,
+      claimed: false,
+    })
+
+    ;; Update market liquidity pools
+    (map-set markets market-id
+      (merge market {
+        bull-stakes: (if (is-eq price-direction "bull")
+          (+ (get bull-stakes market) stake-amount)
+          (get bull-stakes market)
+        ),
+        bear-stakes: (if (is-eq price-direction "bear")
+          (+ (get bear-stakes market) stake-amount)
+          (get bear-stakes market)
+        ),
+      })
+    )
+
+    (ok true)
+  )
+)
+
+;; Market Resolution
+;; Oracle settles market with final Bitcoin price data
+(define-public (resolve-market
+    (market-id uint)
+    (final-price uint)
+  )
+  (let ((market (unwrap! (map-get? markets market-id) ERR_MARKET_NOT_FOUND)))
+    ;; Validate oracle authorization
+    (asserts! (is-eq tx-sender (var-get oracle-address)) ERR_UNAUTHORIZED)
+    (asserts! (>= stacks-block-height (get end-height market)) ERR_MARKET_CLOSED)
+    (asserts! (not (get resolved market)) ERR_MARKET_RESOLVED)
+    (asserts! (> final-price u0) ERR_INVALID_PARAMETER)
+
+    ;; Finalize market with settlement price
+    (map-set markets market-id
+      (merge market {
+        closing-price: final-price,
+        resolved: true,
+      })
+    )
+
+    (ok true)
+  )
+)
