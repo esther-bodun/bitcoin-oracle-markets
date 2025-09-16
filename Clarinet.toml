@@ -8,7 +8,7 @@ requirements = []
 [contracts.bitcoin-oracle-markets]
 path = 'contracts/bitcoin-oracle-markets.clar'
 clarity_version = 3
-epoch = 'latest'
+epoch = 3.0
 [repl.analysis]
 passes = ['check_checker']
 
